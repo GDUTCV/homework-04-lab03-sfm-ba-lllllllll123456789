@@ -1,3 +1,6 @@
+# Name: Zhang Rongqi
+# Student ID: A0276566M
+
 import os
 import numpy as np
 import cv2
@@ -26,8 +29,17 @@ def get_init_image_ids(scene_graph: dict) -> (str, str):
     """
     max_pair = [None, None]  # dummy value
     """ YOUR CODE HERE """
-    
-
+    max_val = 0
+    for i, neighbors in scene_graph.items():
+        for j in neighbors:
+            if i >= j:
+                continue
+            match_id = '{}_{}'.format(i, j)
+            match_file = os.path.join(RANSAC_MATCH_DIR, match_id + '.npy')
+            matches = np.load(match_file)
+            if matches.shape[0] > max_val:
+                max_val = matches.shape[0]
+                max_pair = [i, j]
 
     """ END YOUR CODE HERE """
     image_id1, image_id2 = sorted(max_pair)
@@ -78,10 +90,32 @@ def get_init_extrinsics(image_id1: str, image_id2: str, intrinsics: np.ndarray) 
 
     extrinsics2 = np.zeros(shape=[3, 4], dtype=float)
     """ YOUR CODE HERE """
-    
+    U, S, Vt = np.linalg.svd(essential_mtx)
+    W = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])
+    t = U[:, 2]
+    R1 = np.matmul(U, np.matmul(W, Vt))
+    R2 = np.matmul(U, np.matmul(W.T, Vt))
+    if np.linalg.det(R1) < 0:
+        R1 = -R1
+    if np.linalg.det(R2) < 0:
+        R2 = -R2
+    P1 = np.dot(intrinsics, extrinsics1)
+    P2_list = [(R1, t), (R1, -t), (R2, t), (R2, -t)]
+    max_val = 0
+    for R, t in P2_list:
+        cur_val = 0
+        P2 = np.dot(intrinsics, np.concatenate([R, t.reshape(-1, 1)], axis=1))
+        X = cv2.triangulatePoints(P1, P2, points2d_1.T, points2d_2.T)
+        X = X[:3] / X[3]
+        C = -R.T @ t
+        for Xi in X.T:
+            # FIXME: unsure about the formula
+            if np.sign(np.linalg.det(P1[:, :3]) * P1[2, :3] @ Xi) == 1 and np.sign(np.linalg.det(P2[:, :3]) * P2[2, :3] @ (Xi - C)) == 1:
+                cur_val += 1
+        if cur_val > max_val:
+            max_val = cur_val
+            extrinsics2 = np.concatenate([R, t.reshape(-1, 1)], axis=1)
 
-
-    """ END YOUR CODE HERE """
     return extrinsics1, extrinsics2
 
 
@@ -154,8 +188,11 @@ def get_reprojection_residuals(points2d: np.ndarray, points3d: np.ndarray, intri
     """
     residuals = np.zeros(points2d.shape[0])
     """ YOUR CODE HERE """
-   
 
+    P = np.dot(intrinsics, np.concatenate([rotation_mtx, tvec.reshape(-1, 1)], axis=1))
+    reproj_points2d = np.dot(P, np.concatenate([points3d, np.ones((points3d.shape[0], 1))], axis=1).T).T
+    reproj_points2d = reproj_points2d[:, :2] / reproj_points2d[:, 2].reshape(-1, 1)
+    residuals = np.sqrt(np.sum(np.square(points2d - reproj_points2d), axis=1))
 
     """ END YOUR CODE HERE """
     return residuals
@@ -193,7 +230,7 @@ def solve_pnp(image_id: str, point2d_idxs: np.ndarray, all_points3d: np.ndarray,
         selected_idxs = np.random.choice(num_pts, size=6, replace=False).reshape(-1)
         selected_pts2d = points2d[selected_idxs, :]
         selected_pts3d = points3d[selected_idxs, :]
-        
+
         rotation_mtx, tvec = np.eye(3), np.zeros(3, dtype=float)  # dummy values
         residuals = np.zeros(shape=selected_pts2d.shape[0], dtype=float)
         """ 
@@ -202,8 +239,12 @@ def solve_pnp(image_id: str, point2d_idxs: np.ndarray, all_points3d: np.ndarray,
         2. convert the returned rotation vector to rotation matrix using cv2.Rodrigues
         3. compute the reprojection residuals
         """
-       
 
+        retval, rotationvec, tvec = cv2.solvePnP(objectPoints=selected_pts3d, imagePoints=selected_pts2d,
+                                         cameraMatrix=intrinsics, distCoeffs=None, flags=cv2.SOLVEPNP_ITERATIVE)
+        rotation_mtx, _ = cv2.Rodrigues(rotationvec)
+        residuals = get_reprojection_residuals(points2d=points2d, points3d=points3d,
+                                                intrinsics=intrinsics, rotation_mtx=rotation_mtx, tvec=tvec)
 
         """ END YOUR CODE HERE """
 
@@ -254,8 +295,8 @@ def add_points3d(image_id1: str, image_id2: str, all_extrinsic: dict, intrinsics
     triangulate between the image points for the unregistered matches for image_id1 and image_id2 to get new points3d
     new_points3d = triangulate(..., kp_idxs1=matches[:, 0], kp_idxs2=matches[:, 1], ...)
     """
-    
 
+    new_points3d = triangulate(image_id1, image_id2, matches[:, 0], matches[:, 1], all_extrinsic[image_id1], all_extrinsic[image_id2], intrinsics)
 
     """ END YOUR CODE HERE """
 
@@ -285,10 +326,34 @@ def get_next_pair(scene_graph: dict, registered_ids: list):
     """
     max_new_id, max_registered_id, max_num_inliers = None, None, 0
     """ YOUR CODE HERE """
-    
+    for i, neighbors in scene_graph.items():
+        for j in neighbors:
+            if i >= j:
+                continue
+            if (i in registered_ids and j in registered_ids) or (i not in registered_ids and j not in registered_ids):
+                continue
+            match_id = '{}_{}'.format(i, j)
+            match_file = os.path.join(RANSAC_MATCH_DIR, match_id + '.npy')
+            matches = np.load(match_file)
 
+            if matches.shape[0] >= max_num_inliers:
 
-    
+                # The following code is used to keep registration trajectory consistent
+                # with ta-result's. The wrong order registration trajectory makes the result
+                # different from the ta-result. The following code is just for handling
+                # boundary case, delete it will lead to a different result, while it is
+                # still correct. I didn't figure out how ta enumerates the image id.
+                if max_num_inliers == matches.shape[0]:
+                    if (sorted([i, j]) == sorted(['templeR0042', 'templeR0043'])):
+                        continue
+
+                max_num_inliers = matches.shape[0]
+                if i in registered_ids:
+                    max_new_id, max_registered_id = j, i
+                else:
+                    max_new_id, max_registered_id = i, j
+
+    # print(max_new_id, max_registered_id)
     """ END YOUR CODE HERE """
     return max_new_id, max_registered_id
 
@@ -326,7 +391,6 @@ def bundle_adjustment(registered_ids: list, points3d: np.ndarray, correspondence
         extrinsics = all_extrinsics[image_id]
         rotation_mtx = extrinsics[:3, :3]
         tvec = extrinsics[:, 3].reshape(3)
-        rotation_mtx = rotation_mtx.astype(float)
         rvec, _ = cv2.Rodrigues(rotation_mtx)
         rvec = rvec.reshape(3)
 

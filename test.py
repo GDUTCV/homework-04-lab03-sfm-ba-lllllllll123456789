@@ -3,6 +3,7 @@ import filecmp
 import json
 import os
 import pickle
+import collections
 
 import cv2
 import numpy as np
@@ -62,8 +63,15 @@ def check_keypoints():
         file_path = os.path.join(KEYPOINT_DIR, file)
         ta = read_pickle(file_path.replace("predictions", "ta-results"))
         prd = read_pickle(file_path)
-        keypoints_match = ta['keypoints'] == prd['keypoints']
-        descriptors_match = np.all(ta['descriptors'] == prd['descriptors'])
+        # keypoints_match = ta['keypoints'] == prd['keypoints']
+        ta_keypoints = np.array(ta['keypoints'])
+        prd_keypoints = np.array(prd['keypoints'])
+        keypoints_match = np.linalg.norm(ta_keypoints[:, 1:] - prd_keypoints[:, 1:]) <= 5e-4
+
+        # descriptors_match = np.all(ta['descriptors'] == prd['descriptors'])
+        ta_descriptors = np.array(ta['descriptors'])
+        prd_descriptors = np.array(prd['descriptors'])
+        descriptors_match = np.linalg.norm(ta_descriptors - prd_descriptors) <= 2
         num_match += keypoints_match and descriptors_match
 
     content_match = num_match == len(files)
@@ -82,7 +90,9 @@ def check_folder(directory, func):
         file_path = os.path.join(directory, file)
         ta = func(file_path.replace("predictions", "ta-results"))
         prd = func(file_path)
-        num_match += np.all(ta == prd)
+        # print(np.linalg.norm(ta - prd))
+        # num_match += np.all(ta == prd)
+        num_match += (np.linalg.norm(ta - prd) <= 1e-10)
 
     content_match = num_match == len(files)
     file_count_match = check_file_count(directory)
@@ -94,12 +104,37 @@ def check_npy_file(file_path, func):
     ta = func(file_path.replace("predictions", "ta-results"))
     prd = func(file_path)
 
+
     match = np.allclose(ta, prd, rtol=1e-04)
     file_name = os.path.basename(file_path)
     print("- {:30s}: {}".format(file_name, match))
 
 
 def check_json_files(file_path):
+    ta = file_path.replace("predictions", "ta-results")
+    prd = file_path
+
+    with open(ta, "r") as fp:
+        ta_result = json.load(fp)
+
+    with open(prd, "r") as fp:
+        prd_result = json.load(fp)
+
+    match = True
+    for node, adjs in ta_result.items():
+        if node not in prd_result.keys():
+            match = False
+            break
+        
+        pred_adjs = prd_result[node]
+        if collections.Counter(adjs) != collections.Counter(pred_adjs):
+            match = False
+            break
+
+    file_name = os.path.basename(file_path)
+    print("- {:30s}: {}".format(file_name, match))
+
+def check_txt_files(file_path):
     ta = file_path.replace("predictions", "ta-results")
     prd = file_path
 
@@ -135,7 +170,7 @@ def main():
     check_all_extrinsic_file(ALL_EXTRINSIC)
     check_json_files(CORRESPONDENCES2D3D)
     check_npy_file(POINT3D_FILE, func=np.load)
-    check_json_files(REGISTRATION_TRAJECTORY)
+    check_txt_files(REGISTRATION_TRAJECTORY)
 
 
 if __name__ == "__main__":

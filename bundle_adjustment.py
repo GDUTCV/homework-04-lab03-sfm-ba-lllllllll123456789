@@ -1,3 +1,6 @@
+# Name: Zhang Rongqi
+# Student ID: A0276566M
+
 import numpy as np
 import cv2
 
@@ -44,8 +47,15 @@ def compute_ba_residuals(parameters: np.ndarray, intrinsics: np.ndarray, num_cam
     NOTE: DO NOT USE LOOPS 
     HINT: I used np.matmul; np.sum; np.sqrt; np.square, np.concatenate etc.
     """
-    
 
-    
+    P = np.matmul(intrinsics, extrinsics)
+
+    point3d = points3d[points3d_idxs]
+    point3d = np.concatenate([point3d, np.ones((point3d.shape[0], 1))], axis=1)
+    P = P[camera_idxs]
+    point2d_reprojected = np.einsum('ijk,ik->ij', P, point3d)
+    point2d_reprojected = point2d_reprojected[:, :2] / point2d_reprojected[:, 2:]
+    residuals = np.sqrt(np.sum(np.square(points2d - point2d_reprojected), axis=1))
+
     """ END YOUR CODE HERE """
     return residuals
